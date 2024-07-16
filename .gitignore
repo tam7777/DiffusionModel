@@ -1,0 +1,8 @@
+*
+
+!.gitignore
+!*.py
+!README.md
+!config.yaml
+
+__pycache__/
