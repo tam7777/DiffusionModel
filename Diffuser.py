@@ -1,5 +1,8 @@
 import torch
 import yaml
+from tqdm import tqdm
+from torchvision import transforms
+import matplotlib.pyplot as plt
 
 class Diffuser:
     def __init__(self, device):
@@ -33,8 +36,8 @@ class Diffuser:
 
         t_idx=t-1
         alpha=self.alphas[t_idx]
-        alpha_bar=self.alpha_bar[t_idx]
-        alpha_bar_prev=self.alpha_bar[t_idx-1]
+        alpha_bar=self.alpha_bars[t_idx]
+        alpha_bar_prev=self.alpha_bars[t_idx-1]
 
         N=alpha.size(0)
         alpha=alpha.view(N,1,1,1)
@@ -74,19 +77,3 @@ class Diffuser:
 
         images = [self.reverse_to_img(x[i]) for i in range(batch_size)]
         return images, labels
-
-
-def show_images(images, labels=None, rows=2, cols=10):
-    fig = plt.figure(figsize=(cols, rows))
-    i = 0
-    for r in range(rows):
-        for c in range(cols):
-            ax = fig.add_subplot(rows, cols, i + 1)
-            plt.imshow(images[i], cmap='gray')
-            if labels is not None:
-                ax.set_xlabel(labels[i].item())
-            ax.get_xaxis().set_ticks([])
-            ax.get_yaxis().set_ticks([])
-            i += 1
-    plt.tight_layout()
-    plt.savefig('Output image')
