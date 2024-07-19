@@ -16,7 +16,7 @@ device='cuda'
 
 batch_size = 128
 num_timesteps = 1000
-epochs = 1
+epochs = 2000
 lr = 1e-3
 
 preprocess = transforms.ToTensor()
@@ -49,9 +49,12 @@ elif data=="Celeb":
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
     ])
-    dataset = torchvision.datasets.ImageFolder(root='/raid/miki/', download=True, transform=preprocess)
+    dataset = torchvision.datasets.ImageFolder(root='/raid/miki/', transform=preprocess)
     in_ch=3
     num_labels=None
+
+else:
+    print('Unknown dataset')
 
 weight_path = os.path.join(weight_dir, 'model_weights.pth')
 
@@ -71,11 +74,6 @@ losses = []
 for epoch in range(epochs):
     loss_sum = 0.0
     cnt = 0
-
-    # generate samples every epoch ===================
-    #images, labels = diffuser.sample(model)
-    #show_images(images, labels)
-    # ================================================
 
     for images, labels in tqdm(dataloader):
         optimizer.zero_grad()
