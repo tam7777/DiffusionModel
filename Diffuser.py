@@ -9,10 +9,10 @@ class Diffuser:
         with open('config.yaml', 'rb') as f:
             yml=yaml.safe_load(f)
 
-        self.num_timesteps = yml['num_timesteps']
+        self.num_timesteps = yml['Diffuser']['num_timesteps']
         self.device = device
-        self.beta_start = yml['beta_start']
-        self.beta_end = yml['beta_end']
+        self.beta_start = yml['Diffuser']['beta_start']
+        self.beta_end = yml['Diffuser']['beta_end']
         self.betas=torch.linspace(self.beta_start, self.beta_end, self.num_timesteps, device=self.device)
         self.alphas=1-self.betas
         self.alpha_bars=torch.cumprod(self.alphas, dim=0)

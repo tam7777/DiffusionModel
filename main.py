@@ -11,58 +11,78 @@ from tqdm import tqdm
 from Diffuser import Diffuser
 from Unet import UNet
 import os
+from transformer import DiT
+import yaml
+from transformer import DiT
 
-device='cuda'
+with open('config.yaml', 'rb') as f:
+    yml=yaml.safe_load(f)
 
-batch_size = 128
-num_timesteps = 1000
-epochs = 2000
-lr = 1e-3
+device=yml['Main']['device']
+batch_size = yml['Main']['batch_size']
+num_timesteps = yml['Main']['num_timesteps']
+epochs = yml['Main']['epochs']
+lr = float(yml['Main']['lr'])
+model_type=yml['Main']['model_type']
 
 preprocess = transforms.ToTensor()
 
-data='CIFAR'
-if data=='CIFAR':
-    img_size=32
-    weight_dir = './CIFAR_weight'
+data = yml['Main']['data']
+if data == 'CIFAR':
+    img_size = 32
     preprocess = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
     ])
     dataset = torchvision.datasets.CIFAR10(root='/raid/miki/', download=False, transform=preprocess)
-    in_ch=3
-    num_labels=10
-elif data=='MNIST':
+    in_ch = 3
+    num_labels = 10
+elif data == 'MNIST':
     img_size = 28
-    weight_dir = './MNIST_weight'
     preprocess = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
     ])
     dataset = torchvision.datasets.MNIST(root='/raid/miki/', download=False, transform=preprocess)
-    in_ch=1
-    num_labels=10
-elif data=="Celeb":
-    img_size=256
-    weight_dir='./Celeb_weight'
+    in_ch = 1
+    num_labels = 10
+elif data == "Celeb":
+    img_size = 256
     preprocess = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
     ])
     dataset = torchvision.datasets.ImageFolder(root='/raid/miki/', transform=preprocess)
-    in_ch=3
-    num_labels=None
-
+    in_ch = 3
+    num_labels = None
+elif data == "ImageNet":  # <--- Added support for ImageNet
+    img_size = 224  # ImageNet images are usually larger
+    preprocess = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+    ])
+    dataset = torchvision.datasets.ImageFolder(root='/path/to/imagenet', transform=preprocess)
+    in_ch = 3
+    num_labels = 1000  # ImageNet has 1000 classes
 else:
     print('Unknown dataset')
 
+weight_dir = f"./{data}_weight_{model_type}"
 weight_path = os.path.join(weight_dir, 'model_weights.pth')
 
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 diffuser = Diffuser(device=device)
-model = UNet(in_ch=in_ch, num_labels=num_labels)
+if model_type=="unet":
+    model = UNet(in_ch=in_ch, time_embed_dim=yml['Unet']['time_embed_dim'] ,num_labels=num_labels)
+elif model_type=="dit":
+    model = DiT(in_ch=in_ch, img_size=img_size, num_labels=num_labels)
+else: print("data should be either dit ot unet")
 model.to(device)
+
+print(sum(p.numel() for p in model.parameters())/1e6, "M parameters")
+
+
 optimizer = Adam(model.parameters(), lr=lr)
 
 # Load weights if they exist
