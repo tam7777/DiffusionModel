@@ -1,97 +1,74 @@
-import math
+import os
 import torch
+
+# Verify which GPU is being used
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+gpu_name = torch.cuda.get_device_name(device)
+print(f"Using GPU: {torch.cuda.current_device()} with {gpu_name}")
+
+import math
 import torchvision
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from torch.utils.data import DataLoader
-from torch.optim import Adam
+from torch.optim import AdamW
 import torch.nn.functional as F
-from torch import nn
 from tqdm import tqdm
 from Diffuser import Diffuser
 from Unet import UNet
-import os
-from transformer import DiT
+from dit import DiT
+from transformer import Beta_DiT
 import yaml
-from transformer import DiT
+from pos_enc import get_data
 
+# Load configuration
 with open('config.yaml', 'rb') as f:
-    yml=yaml.safe_load(f)
+    yml = yaml.safe_load(f)
 
-device=yml['Main']['device']
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 batch_size = yml['Main']['batch_size']
 num_timesteps = yml['Main']['num_timesteps']
 epochs = yml['Main']['epochs']
 lr = float(yml['Main']['lr'])
-model_type=yml['Main']['model_type']
-
-preprocess = transforms.ToTensor()
-
+model_type = yml['Main']['model_type']
 data = yml['Main']['data']
-if data == 'CIFAR':
-    img_size = 32
-    preprocess = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-    ])
-    dataset = torchvision.datasets.CIFAR10(root='/raid/miki/', download=False, transform=preprocess)
-    in_ch = 3
-    num_labels = 10
-elif data == 'MNIST':
-    img_size = 28
-    preprocess = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-    ])
-    dataset = torchvision.datasets.MNIST(root='/raid/miki/', download=False, transform=preprocess)
-    in_ch = 1
-    num_labels = 10
-elif data == "Celeb":
-    img_size = 256
-    preprocess = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-    ])
-    dataset = torchvision.datasets.ImageFolder(root='/raid/miki/', transform=preprocess)
-    in_ch = 3
-    num_labels = None
-elif data == "ImageNet":  # <--- Added support for ImageNet
-    img_size = 224  # ImageNet images are usually larger
-    preprocess = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-    ])
-    dataset = torchvision.datasets.ImageFolder(root='/path/to/imagenet', transform=preprocess)
-    in_ch = 3
-    num_labels = 1000  # ImageNet has 1000 classes
-else:
-    print('Unknown dataset')
 
+# Get data
+img_size, dataset, in_ch, num_labels = get_data(data)
 weight_dir = f"./{data}_weight_{model_type}"
 weight_path = os.path.join(weight_dir, 'model_weights.pth')
 
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
 diffuser = Diffuser(device=device)
-if model_type=="unet":
-    model = UNet(in_ch=in_ch, time_embed_dim=yml['Unet']['time_embed_dim'] ,num_labels=num_labels)
-elif model_type=="dit":
-    model = DiT(in_ch=in_ch, img_size=img_size, num_labels=num_labels)
-else: print("data should be either dit ot unet")
+
+# Model selection
+if model_type == "unet":
+    model = UNet(in_ch=in_ch, time_embed_dim=yml['Unet']['time_embed_dim'], num_labels=num_labels)
+elif model_type == "dit":
+    model = DiT(input_size=img_size, patch_size=2, in_channels=in_ch, hidden_size=yml['DiT']['n_embd'], 
+                depth=yml['DiT']['n_layer'], num_heads=yml['DiT']['n_head'], num_classes=num_labels)
+elif model_type == "dit_beta":
+    model = Beta_DiT(in_ch=in_ch, img_size=img_size, num_labels=num_labels)
+else:
+    raise ValueError("Model type should be either 'unet' or 'dit'")
+
 model.to(device)
+print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
 
-print(sum(p.numel() for p in model.parameters())/1e6, "M parameters")
-
-
-optimizer = Adam(model.parameters(), lr=lr)
+optimizer = AdamW(model.parameters(), lr=lr)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 # Load weights if they exist
 if os.path.exists(weight_path):
-    model.load_state_dict(torch.load(weight_path))
-    print(f"Loaded weights from {weight_path}")
+    try:
+        model.load_state_dict(torch.load(weight_path))
+        print(f"Loaded weights from {weight_path}")
+    except:
+        print("Weights not load")
 
 losses = []
 for epoch in range(epochs):
+    model.train()
     loss_sum = 0.0
     cnt = 0
 
@@ -99,11 +76,11 @@ for epoch in range(epochs):
         optimizer.zero_grad()
         x = images.to(device)
         labels = labels.to(device)
-        t = torch.randint(1, num_timesteps+1, (len(x),), device=device)
+        t = torch.randint(1, num_timesteps + 1, (len(x),), device=device)
 
         x_noisy, noise = diffuser.add_noise(x, t)
         noise_pred = model(x_noisy, t, labels)
-        loss = F.mse_loss(noise, noise_pred)
+        loss = F.mse_loss(noise_pred, noise)
 
         loss.backward()
         optimizer.step()
@@ -111,9 +88,12 @@ for epoch in range(epochs):
         loss_sum += loss.item()
         cnt += 1
 
+    scheduler.step()
     loss_avg = loss_sum / cnt
     losses.append(loss_avg)
     print(f'Epoch {epoch} | Loss: {loss_avg}')
+
+    torch.save(model.state_dict(), weight_path)
 
     # Save weights every epoch
     torch.save(model.state_dict(), weight_path)
@@ -157,6 +137,8 @@ def show_images(images, labels=None, rows=2, cols=10):
     plt.savefig(out_path)
 
 # generate samples
-images, labels = diffuser.sample(model, x_shape=(20, in_ch, img_size, img_size))
+model.eval()
+with torch.no_grad():
+    images, labels = diffuser.sample(model, x_shape=(20, in_ch, img_size, img_size))
 
 show_images(images, labels)

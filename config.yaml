@@ -6,14 +6,14 @@ Unet:
   time_embed_dim: 100
 DiT:
   n_embd: 384
-  n_layer: 6
+  n_layer: 2
   n_head: 6
 
 Main:
   device: 'cuda'
-  batch_size: 128
+  batch_size: 16
   num_timesteps: 1000
-  epochs: 1000
+  epochs: 1
   lr: 1e-3
-  model_type: 'dit'
-  data: 'CIFAR'
+  model_type: 'dit_beta'
+  data: 'ImageNet'

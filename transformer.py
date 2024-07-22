@@ -26,7 +26,7 @@ class TransformerBlock(nn.Module):
         x = self.norm2(x)
         return x
 
-class DiT(nn.Module):
+class Beta_DiT(nn.Module):
     def __init__(self, in_ch, img_size, num_labels=None):
         super().__init__()
 
@@ -64,7 +64,7 @@ class DiT(nn.Module):
 if __name__ == "__main__":
     in_ch=1
     img_size=28
-    model = DiT(in_ch=in_ch, img_size=img_size)
+    model = Beta_DiT(in_ch=in_ch, img_size=img_size)
     x = torch.randn(10, 1, 28, 28).cuda()  # dummy input on CUDA
     timesteps = torch.randint(0, 100, (10,)).cuda()  # dummy timesteps on CUDA
     model = model.cuda()  # move model to CUDA
