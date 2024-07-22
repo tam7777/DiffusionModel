@@ -15,5 +15,6 @@ Main:
   num_timesteps: 1000
   epochs: 1
   lr: 1e-3
-  model_type: 'dit_beta'
-  data: 'ImageNet'
+  model_type: 'dit'
+  data: 'MNIST'
+  num_samples: 20

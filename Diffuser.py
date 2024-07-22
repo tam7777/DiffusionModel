@@ -3,6 +3,7 @@ import yaml
 from tqdm import tqdm
 from torchvision import transforms
 import matplotlib.pyplot as plt
+from diffusers import AutoencoderKL
 
 class Diffuser:
     def __init__(self, device):
@@ -16,6 +17,7 @@ class Diffuser:
         self.betas=torch.linspace(self.beta_start, self.beta_end, self.num_timesteps, device=self.device)
         self.alphas=1-self.betas
         self.alpha_bars=torch.cumprod(self.alphas, dim=0)
+        #self.vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema").to(device)
 
     def add_noise(self, x_0, t):
         T=self.num_timesteps
@@ -65,11 +67,11 @@ class Diffuser:
         to_pil = transforms.ToPILImage()
         return to_pil(x)
 
-    def sample(self, model, x_shape=(20, 1, 28, 28), labels=None):
+    def sample(self, model, x_shape=(20, 1, 28, 28), labels=None, num_labels=10):
         batch_size = x_shape[0]
         x = torch.randn(x_shape, device=self.device)
         if labels is None:
-            labels = torch.randint(0, 10, (len(x),), device=self.device)
+            labels = torch.randint(0, num_labels, (len(x),), device=self.device)
 
         for i in tqdm(range(self.num_timesteps, 0, -1)):
             t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
@@ -77,3 +79,8 @@ class Diffuser:
 
         images = [self.reverse_to_img(x[i]) for i in range(batch_size)]
         return images, labels
+
+
+"""
+change so that we can use VAE
+"""

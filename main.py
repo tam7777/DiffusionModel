@@ -20,6 +20,11 @@ from dit import DiT
 from transformer import Beta_DiT
 import yaml
 from pos_enc import get_data
+from torchvision.utils import save_image
+from torchvision import transforms
+import PIL
+import torch_fidelity
+from diffusers import AutoencoderKL
 
 # Load configuration
 with open('config.yaml', 'rb') as f:
@@ -38,6 +43,9 @@ img_size, dataset, in_ch, num_labels = get_data(data)
 weight_dir = f"./{data}_weight_{model_type}"
 weight_path = os.path.join(weight_dir, 'model_weights.pth')
 
+gen_images_dir=os.path.join(weight_dir, 'generated')
+real_images_dir=os.path.join(weight_dir, 'original')
+
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 diffuser = Diffuser(device=device)
 
@@ -52,6 +60,7 @@ elif model_type == "dit_beta":
 else:
     raise ValueError("Model type should be either 'unet' or 'dit'")
 
+
 model.to(device)
 print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
 
@@ -65,6 +74,8 @@ if os.path.exists(weight_path):
         print(f"Loaded weights from {weight_path}")
     except:
         print("Weights not load")
+
+torch.set_float32_matmul_precision('high')
 
 losses = []
 for epoch in range(epochs):
@@ -133,12 +144,38 @@ def show_images(images, labels=None, rows=2, cols=10):
             ax.get_yaxis().set_ticks([])
             i += 1
     plt.tight_layout()
-    out_path = os.path.join(weight_dir, 'Output_image')
+    out_path = os.path.join(weight_dir, 'output_image')
     plt.savefig(out_path)
 
 # generate samples
+num_samples = yml['Main']['num_samples']
 model.eval()
 with torch.no_grad():
-    images, labels = diffuser.sample(model, x_shape=(20, in_ch, img_size, img_size))
+    images, labels = diffuser.sample(model, x_shape=(num_samples, in_ch, img_size, img_size), num_labels=num_labels)
 
 show_images(images, labels)
+
+for idx, (image, label) in enumerate(dataset):
+    save_image(image, os.path.join(real_images_dir, f'real_{idx}.png'))
+    if idx+1>=num_samples: break
+
+# Save generated images
+# Ensure all images are of the same size
+transform = transforms.Compose([
+    transforms.Resize((img_size, img_size)),
+    transforms.ToTensor()
+])
+for i, img in enumerate(images):
+    if isinstance(img, PIL.Image.Image):
+        img = transform(img)
+    save_image(img, os.path.join(gen_images_dir, f"gen_{i}.png"))
+
+
+fid_score = torch_fidelity.calculate_metrics(
+    input1=real_images_dir,
+    input2=gen_images_dir,
+    cuda=True,
+    fid=True
+)
+
+print(f"FID: {fid_score['frechet_inception_distance']}")

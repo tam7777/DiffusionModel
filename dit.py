@@ -253,3 +253,10 @@ if __name__ == "__main__":
     time_3=end_3-start_3
 
     print(f"Dit: {time_1} Beta_Dit: {time_2} Unet: {time_3}")
+
+    """
+    Ideas for better DiT:
+    Initialize the weight to 1/sqrt(N)
+    Flash attention
+    Easier attention to Unet
+    """

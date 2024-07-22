@@ -22,6 +22,8 @@ def pos_encoding(timesteps, output_dim, device='cuda'):
 
 import torchvision
 from torchvision import transforms
+from torch.utils.data import DataLoader, Subset
+import numpy as np
 
 def get_data(data):
     if data == 'CIFAR':
@@ -51,6 +53,10 @@ def get_data(data):
         dataset = torchvision.datasets.ImageFolder(root='/raid/miki/imagenet/ILSVRC/Data/CLS-LOC/train', transform=preprocess)
         in_ch = 3
         num_labels = 1000
+
+        num_images = 1000
+        indices = np.random.choice(len(dataset), num_images, replace=False)
+        dataset = Subset(dataset, indices)
     
     else:
         raise ValueError('Unknown dataset')
