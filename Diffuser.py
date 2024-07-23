@@ -69,7 +69,8 @@ class Diffuser:
 
     def sample(self, model, x_shape=(20, 1, 28, 28), labels=None, num_labels=10):
         batch_size = x_shape[0]
-        x = torch.randn(x_shape, device=self.device)
+        x = torch.randn(x_shape).to(self.device)
+        #x = torch.randn(tuple(x_shape), device=self.device)  # Corrected line
         if labels is None:
             labels = torch.randint(0, num_labels, (len(x),), device=self.device)
 
@@ -77,10 +78,5 @@ class Diffuser:
             t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
             x = self.denoise(model, x, t, labels)
 
-        images = [self.reverse_to_img(x[i]) for i in range(batch_size)]
-        return images, labels
+        return x, labels
 
-
-"""
-change so that we can use VAE
-"""

@@ -1,8 +1,10 @@
 import os
 import torch
 
+#CUDA_VISIBLE_DEVICES=7 python3 main.py
+
 # Verify which GPU is being used
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 gpu_name = torch.cuda.get_device_name(device)
 print(f"Using GPU: {torch.cuda.current_device()} with {gpu_name}")
 
@@ -19,7 +21,7 @@ from Unet import UNet
 from dit import DiT
 from transformer import Beta_DiT
 import yaml
-from pos_enc import get_data
+from pos_enc import get_data, save_losses_to_file, delete_file,get_number_of_epochs
 from torchvision.utils import save_image
 from torchvision import transforms
 import PIL
@@ -49,14 +51,30 @@ real_images_dir=os.path.join(weight_dir, 'original')
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 diffuser = Diffuser(device=device)
 
+# Initialize VAE
+vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema").to(device)
+
+latent_dim=4
+latent_size=img_size//8
+
 # Model selection
 if model_type == "unet":
-    model = UNet(in_ch=in_ch, time_embed_dim=yml['Unet']['time_embed_dim'], num_labels=num_labels)
+    if data!="MNIST":
+        model = UNet(in_ch=latent_dim, time_embed_dim=yml['Unet']['time_embed_dim'], num_labels=num_labels)
+    else:
+        model = UNet(in_ch=in_ch, time_embed_dim=yml['Unet']['time_embed_dim'], num_labels=num_labels)
 elif model_type == "dit":
-    model = DiT(input_size=img_size, patch_size=2, in_channels=in_ch, hidden_size=yml['DiT']['n_embd'], 
+    if data!="MNIST":
+        model = DiT(input_size=latent_size, patch_size=2, in_channels=latent_dim, hidden_size=yml['DiT']['n_embd'], 
                 depth=yml['DiT']['n_layer'], num_heads=yml['DiT']['n_head'], num_classes=num_labels)
+    else:
+        model = DiT(input_size=img_size, patch_size=2, in_channels=in_ch, hidden_size=yml['DiT']['n_embd'], 
+                depth=yml['DiT']['n_layer'], num_heads=yml['DiT']['n_head'], num_classes=num_labels)    
 elif model_type == "dit_beta":
-    model = Beta_DiT(in_ch=in_ch, img_size=img_size, num_labels=num_labels)
+    if data!="MNIST":
+        model = Beta_DiT(in_ch=latent_dim, img_size=latent_size, num_labels=num_labels)
+    else:
+        model = Beta_DiT(in_ch=in_ch, img_size=img_size, num_labels=num_labels)
 else:
     raise ValueError("Model type should be either 'unet' or 'dit'")
 
@@ -68,12 +86,16 @@ optimizer = AdamW(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 # Load weights if they exist
+loss_file_path=os.path.join(weight_dir, 'losses.txt')
+exiting_epoch=0
 if os.path.exists(weight_path):
     try:
         model.load_state_dict(torch.load(weight_path))
         print(f"Loaded weights from {weight_path}")
+        exiting_epoch=get_number_of_epochs(loss_file_path)
     except:
         print("Weights not load")
+        delete_file(loss_file_path)
 
 torch.set_float32_matmul_precision('high')
 
@@ -89,7 +111,15 @@ for epoch in range(epochs):
         labels = labels.to(device)
         t = torch.randint(1, num_timesteps + 1, (len(x),), device=device)
 
-        x_noisy, noise = diffuser.add_noise(x, t)
+        # Encode images to latent space
+        if data != "MNIST":
+            with torch.no_grad():
+                x_latent = vae.encode(x).latent_dist.sample().mul_(0.18215)  # Scaling factor used in official implementation
+        else:
+            x_latent=x
+        x_latent=x_latent.to(device)
+
+        x_noisy, noise = diffuser.add_noise(x_latent, t)
         noise_pred = model(x_noisy, t, labels)
         loss = F.mse_loss(noise_pred, noise)
 
@@ -104,12 +134,15 @@ for epoch in range(epochs):
     losses.append(loss_avg)
     print(f'Epoch {epoch} | Loss: {loss_avg}')
 
-    torch.save(model.state_dict(), weight_path)
+    # Save weights every 10 epoch
+    if epoch%10==0:
+        temp_weight_path = weight_dir + f'/weight/{epoch+exiting_epoch}_weight.pth'
+        torch.save(model.state_dict(), temp_weight_path)
 
-    # Save weights every epoch
-    torch.save(model.state_dict(), weight_path)
+torch.save(model.state_dict(), weight_path)
 
 # plot losses
+save_losses_to_file(losses, loss_file_path)
 loss_plot_path = os.path.join(weight_dir, 'loss_plot.png')
 plt.plot(losses)
 plt.xlabel('Epoch')
@@ -129,35 +162,45 @@ cifar_labels = {
     9: "Truck"
 }
 
-def show_images(images, labels=None, rows=2, cols=10):
+def show_images(image_dir, labels=None, rows=2, cols=10):
     fig = plt.figure(figsize=(cols, rows))
     i = 0
     for r in range(rows):
         for c in range(cols):
+            img_path=image_dir+f"/generated/gen_{i}.png"
+            img = PIL.Image.open(img_path)
             ax = fig.add_subplot(rows, cols, i + 1)
-            plt.imshow(images[i], cmap='gray')
+            plt.imshow(img)
             if labels is not None:
-                if data=='CIFAR':  ax.set_xlabel(cifar_labels[int(labels[i].item())])          
+                if data == 'CIFAR':  
+                    ax.set_xlabel(cifar_labels[int(labels[i].item())])
                 else:
                     ax.set_xlabel(labels[i].item())
             ax.get_xaxis().set_ticks([])
             ax.get_yaxis().set_ticks([])
             i += 1
+            if i>=20: break
     plt.tight_layout()
-    out_path = os.path.join(weight_dir, 'output_image')
-    plt.savefig(out_path)
+    plt.savefig(os.path.join(image_dir, 'output_image.png'))
+
 
 # generate samples
 num_samples = yml['Main']['num_samples']
 model.eval()
 with torch.no_grad():
-    images, labels = diffuser.sample(model, x_shape=(num_samples, in_ch, img_size, img_size), num_labels=num_labels)
+    images_latent, labels = diffuser.sample(model, x_shape=(20, latent_dim, latent_size, latent_size), num_labels=num_labels)
+    if data!="MNIST":
+        images = vae.decode(images_latent / 0.18215).sample
 
-show_images(images, labels)
+# Ensure the images are saved correctly using save_image
+for i in range(images.size(0)):
+    save_image(images[i], os.path.join(gen_images_dir, f"gen_{i}.png"), normalize=True, value_range=(-1, 1))
+
+show_images(weight_dir, labels)
 
 for idx, (image, label) in enumerate(dataset):
     save_image(image, os.path.join(real_images_dir, f'real_{idx}.png'))
-    if idx+1>=num_samples: break
+    if idx+1 >= num_samples: break
 
 # Save generated images
 # Ensure all images are of the same size

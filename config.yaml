@@ -13,8 +13,8 @@ Main:
   device: 'cuda'
   batch_size: 16
   num_timesteps: 1000
-  epochs: 1
+  epochs: 1000
   lr: 1e-3
-  model_type: 'dit'
-  data: 'MNIST'
+  model_type: 'unet'
+  data: 'HAM'
   num_samples: 20
