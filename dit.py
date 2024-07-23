@@ -1,10 +1,12 @@
 from torch import nn
 import torch
+from torch.nn import functional as F
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 from transformer import Beta_DiT
 from Unet import UNet
+import inspect
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -61,6 +63,7 @@ class DiTBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        #yimm.attention uses flash attention if possible
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
@@ -171,6 +174,28 @@ class DiT(nn.Module):
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
         return torch.cat([eps, rest], dim=1)
+
+    def configure_optimizers(self, weight_decay, learning_rate, device):
+        #ALl parameters that require grad
+        param_dict={pn: p for pn,p in self.named_parameters()}
+        param_dict={pn: p for pn,p in param_dict.items() if p.requires_grad}
+        #Param wi 2D will be weight decay otherwise no
+        decay_params=[p for n,p in param_dict.items() if p.dim() >=2]
+        nodecay_params=[p for n,p in param_dict.items() if p.dim() <2]
+        optim_groups=[
+            {'params': decay_params, 'weight_decay':weight_decay},
+            {'params': nodecay_params, 'weight_decay':0.0}
+        ]
+        num_decay_params=sum(p.numel() for p in decay_params)
+        num_nodecay_params=sum(p.numel() for p in nodecay_params)
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        #fused AdamW is a faster only in CUDA
+        fused_available='fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused=fused_available and 'cuda' in device
+        print(f"Using fused AdamW: {use_fused}")
+        optimizer=torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+        return optimizer
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=0):
     grid_h = np.arange(grid_size, dtype=np.float32)

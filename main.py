@@ -1,12 +1,8 @@
 import os
 import torch
+import inspect
 
 #CUDA_VISIBLE_DEVICES=7 python3 main.py
-
-# Verify which GPU is being used
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-gpu_name = torch.cuda.get_device_name(device)
-print(f"Using GPU: {torch.cuda.current_device()} with {gpu_name}")
 
 import math
 import torchvision
@@ -32,7 +28,7 @@ from diffusers import AutoencoderKL
 with open('config.yaml', 'rb') as f:
     yml = yaml.safe_load(f)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device=yml['Main']['device']
 batch_size = yml['Main']['batch_size']
 num_timesteps = yml['Main']['num_timesteps']
 epochs = yml['Main']['epochs']
@@ -81,8 +77,10 @@ else:
 
 model.to(device)
 print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
+model=torch.compile(model)
 
-optimizer = AdamW(model.parameters(), lr=lr)
+#optimizer = AdamW(model.parameters(), lr=lr)
+optimizer=model.configure_optimizers(weight_decay=0.1, learning_rate=lr, device=device)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 # Load weights if they exist
@@ -120,11 +118,19 @@ for epoch in range(epochs):
         x_latent=x_latent.to(device)
 
         x_noisy, noise = diffuser.add_noise(x_latent, t)
+        #noise_pred has e-01 meaning quite float sensitive, maybe would work if 
+        #noise and noise_pred is both bfloat16
+        #with torch.autocast(device_type=device, dtype=torch.bfloat16):
         noise_pred = model(x_noisy, t, labels)
+           
         loss = F.mse_loss(noise_pred, noise)
 
         loss.backward()
+        #Clip the global norm of the gradient to 1
+        norm=torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+
+        torch.cuda.synchronize()
 
         loss_sum += loss.item()
         cnt += 1
@@ -222,3 +228,10 @@ fid_score = torch_fidelity.calculate_metrics(
 )
 
 print(f"FID: {fid_score['frechet_inception_distance']}")
+
+"""
+How else can we make this faster:
+    Big match
+     create minibatch
+    learning rate skeduler
+"""

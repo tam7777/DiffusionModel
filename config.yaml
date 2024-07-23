@@ -11,10 +11,10 @@ DiT:
 
 Main:
   device: 'cuda'
-  batch_size: 16
+  batch_size: 32
   num_timesteps: 1000
-  epochs: 1000
-  lr: 1e-3
-  model_type: 'unet'
+  epochs: 1
+  lr: 1e-4
+  model_type: 'dit'
   data: 'HAM'
   num_samples: 20
