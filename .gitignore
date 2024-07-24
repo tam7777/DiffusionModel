@@ -4,5 +4,6 @@
 !*.py
 !README.md
 !config.yaml
+!requirements.txt
 
 __pycache__/

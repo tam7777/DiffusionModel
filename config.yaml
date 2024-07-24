@@ -6,14 +6,14 @@ Unet:
   time_embed_dim: 100
 DiT:
   n_embd: 384
-  n_layer: 2
+  n_layer: 6
   n_head: 6
 
 Main:
   device: 'cuda'
   batch_size: 32
   num_timesteps: 1000
-  epochs: 1
+  epochs: 9000
   lr: 1e-4
   model_type: 'dit'
   data: 'HAM'

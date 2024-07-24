@@ -23,6 +23,11 @@ from torchvision import transforms
 import PIL
 import torch_fidelity
 from diffusers import AutoencoderKL
+import torch._dynamo
+#torch._dynamo.config.suppress_errors = True
+
+import warnings
+warnings.simplefilter('ignore')
 
 # Load configuration
 with open('config.yaml', 'rb') as f:
@@ -36,15 +41,49 @@ lr = float(yml['Main']['lr'])
 model_type = yml['Main']['model_type']
 data = yml['Main']['data']
 
+from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+
+# Use DDP (Distributed Data Parallel)
+ddp = int(os.environ.get('RANK', -1)) != -1 
+if ddp:
+    assert torch.cuda.is_available(), "CUDA not available"
+    init_process_group(backend='nccl')
+    ddp_rank = int(os.environ['RANK'])  # Global rank of the process
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])  # Local rank of the process
+    ddp_world_size = int(os.environ['WORLD_SIZE'])  # Total number of processes
+    device = f'cuda:{ddp_local_rank}'  # Assign unique device for each process
+    torch.cuda.set_device(device)
+    master_process = ddp_rank == 0  # True if this is the master process
+else:
+    # Non-DDP
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+    device = "cuda"
+    print("Running in non-DDP mode")
+device_dtype='cuda'
+
 # Get data
 img_size, dataset, in_ch, num_labels = get_data(data)
 weight_dir = f"./{data}_weight_{model_type}"
+#weight_dir = f"./MNIST_weight_unet"
 weight_path = os.path.join(weight_dir, 'model_weights.pth')
 
 gen_images_dir=os.path.join(weight_dir, 'generated')
 real_images_dir=os.path.join(weight_dir, 'original')
 
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+dataloader = DataLoader(
+    dataset,
+    batch_size=batch_size // ddp_world_size,
+    shuffle=False,
+    sampler=DistributedSampler(dataset, num_replicas=ddp_world_size, rank=ddp_rank,shuffle=True),
+    num_workers=4,
+    pin_memory=True
+)
 diffuser = Diffuser(device=device)
 
 # Initialize VAE
@@ -76,24 +115,30 @@ else:
 
 
 model.to(device)
-print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
 model=torch.compile(model)
+model = DDP(model, device_ids=[ddp_local_rank])
+raw_model=model.module if ddp else model
+if master_process:print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
 
 #optimizer = AdamW(model.parameters(), lr=lr)
-optimizer=model.configure_optimizers(weight_decay=0.1, learning_rate=lr, device=device)
+optimizer=raw_model.configure_optimizers(weight_decay=0.1, learning_rate=lr, device=device)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 # Load weights if they exist
 loss_file_path=os.path.join(weight_dir, 'losses.txt')
 exiting_epoch=0
+
 if os.path.exists(weight_path):
     try:
         model.load_state_dict(torch.load(weight_path))
-        print(f"Loaded weights from {weight_path}")
-        exiting_epoch=get_number_of_epochs(loss_file_path)
+        if master_process:print(f"Loaded weights from {weight_path}")
+        exiting_epoch=get_number_of_epochs(f"{weight_dir}/weight", loss_file_path)
     except:
-        print("Weights not load")
-        delete_file(loss_file_path)
+        if master_process:print("Weights not load")
+        old_loss_file_path=os.path.join(weight_dir, 'old_losses.txt')
+        delete_file(loss_file_path, old_loss_file_path)
+else:
+    if master_process:print(f"Can not find {weight_path}")
 
 torch.set_float32_matmul_precision('high')
 
@@ -103,7 +148,7 @@ for epoch in range(epochs):
     loss_sum = 0.0
     cnt = 0
 
-    for images, labels in tqdm(dataloader):
+    for images, labels in dataloader:
         optimizer.zero_grad()
         x = images.to(device)
         labels = labels.to(device)
@@ -126,6 +171,7 @@ for epoch in range(epochs):
         loss = F.mse_loss(noise_pred, noise)
 
         loss.backward()
+
         #Clip the global norm of the gradient to 1
         norm=torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
@@ -133,101 +179,109 @@ for epoch in range(epochs):
         torch.cuda.synchronize()
 
         loss_sum += loss.item()
+
         cnt += 1
 
     scheduler.step()
     loss_avg = loss_sum / cnt
+
+    if ddp:
+        loss_av=torch.tensor(loss_avg, device=device)
+        dist.all_reduce(loss_av, op=dist.ReduceOp.AVG)
+
     losses.append(loss_avg)
-    print(f'Epoch {epoch} | Loss: {loss_avg}')
+    if master_process:
+        print(f'Epoch {epoch+exiting_epoch} | Loss: {loss_avg}')
 
     # Save weights every 10 epoch
-    if epoch%10==0:
+    if epoch%25==0 and master_process:
         temp_weight_path = weight_dir + f'/weight/{epoch+exiting_epoch}_weight.pth'
         torch.save(model.state_dict(), temp_weight_path)
+        torch.save(model.state_dict(), weight_path)
 
-torch.save(model.state_dict(), weight_path)
+if master_process:
+    # plot losses
+    save_losses_to_file(losses, loss_file_path)
+    loss_plot_path = os.path.join(weight_dir, 'loss_plot.png')
+    plt.plot(losses)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.savefig(loss_plot_path)
 
-# plot losses
-save_losses_to_file(losses, loss_file_path)
-loss_plot_path = os.path.join(weight_dir, 'loss_plot.png')
-plt.plot(losses)
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.savefig(loss_plot_path)
+    cifar_labels = {
+        0: "Airplane",
+        1: "Automobile",
+        2: "Bird",
+        3: "Cat",
+        4: "Deer",
+        5: "Dog",
+        6: "Frog",
+        7: "Horse",
+        8: "Ship",
+        9: "Truck"
+    }
 
-cifar_labels = {
-    0: "Airplane",
-    1: "Automobile",
-    2: "Bird",
-    3: "Cat",
-    4: "Deer",
-    5: "Dog",
-    6: "Frog",
-    7: "Horse",
-    8: "Ship",
-    9: "Truck"
-}
+    def show_images(image_dir, labels=None, rows=2, cols=10):
+        fig = plt.figure(figsize=(cols, rows))
+        i = 0
+        for r in range(rows):
+            for c in range(cols):
+                img_path=image_dir+f"/generated/gen_{i}.png"
+                img = PIL.Image.open(img_path)
+                ax = fig.add_subplot(rows, cols, i + 1)
+                plt.imshow(img)
+                if labels is not None:
+                    if data == 'CIFAR':  
+                        ax.set_xlabel(cifar_labels[int(labels[i].item())])
+                    else:
+                        ax.set_xlabel(labels[i].item())
+                ax.get_xaxis().set_ticks([])
+                ax.get_yaxis().set_ticks([])
+                i += 1
+                if i>=20: break
+        plt.tight_layout()
+        plt.savefig(os.path.join(image_dir, 'output_image.png'))
 
-def show_images(image_dir, labels=None, rows=2, cols=10):
-    fig = plt.figure(figsize=(cols, rows))
-    i = 0
-    for r in range(rows):
-        for c in range(cols):
-            img_path=image_dir+f"/generated/gen_{i}.png"
-            img = PIL.Image.open(img_path)
-            ax = fig.add_subplot(rows, cols, i + 1)
-            plt.imshow(img)
-            if labels is not None:
-                if data == 'CIFAR':  
-                    ax.set_xlabel(cifar_labels[int(labels[i].item())])
-                else:
-                    ax.set_xlabel(labels[i].item())
-            ax.get_xaxis().set_ticks([])
-            ax.get_yaxis().set_ticks([])
-            i += 1
-            if i>=20: break
-    plt.tight_layout()
-    plt.savefig(os.path.join(image_dir, 'output_image.png'))
+    # generate samples
+    num_samples = yml['Main']['num_samples']
+    model.eval()
+    with torch.no_grad():
+        images_latent, labels = diffuser.sample(model, x_shape=(20, latent_dim, latent_size, latent_size), num_labels=num_labels)
+        if data!="MNIST":
+            images = vae.decode(images_latent / 0.18215).sample
 
+    # Ensure the images are saved correctly using save_image
+    for i in range(images.size(0)):
+        save_image(images[i], os.path.join(gen_images_dir, f"gen_{i}.png"), normalize=True, value_range=(-1, 1))
 
-# generate samples
-num_samples = yml['Main']['num_samples']
-model.eval()
-with torch.no_grad():
-    images_latent, labels = diffuser.sample(model, x_shape=(20, latent_dim, latent_size, latent_size), num_labels=num_labels)
-    if data!="MNIST":
-        images = vae.decode(images_latent / 0.18215).sample
+    show_images(weight_dir, labels)
 
-# Ensure the images are saved correctly using save_image
-for i in range(images.size(0)):
-    save_image(images[i], os.path.join(gen_images_dir, f"gen_{i}.png"), normalize=True, value_range=(-1, 1))
+    for idx, (image, label) in enumerate(dataset):
+        save_image(image, os.path.join(real_images_dir, f'real_{idx}.png'))
+        if idx+1 >= num_samples: break
 
-show_images(weight_dir, labels)
-
-for idx, (image, label) in enumerate(dataset):
-    save_image(image, os.path.join(real_images_dir, f'real_{idx}.png'))
-    if idx+1 >= num_samples: break
-
-# Save generated images
-# Ensure all images are of the same size
-transform = transforms.Compose([
-    transforms.Resize((img_size, img_size)),
-    transforms.ToTensor()
-])
-for i, img in enumerate(images):
-    if isinstance(img, PIL.Image.Image):
-        img = transform(img)
-    save_image(img, os.path.join(gen_images_dir, f"gen_{i}.png"))
+    # Save generated images
+    # Ensure all images are of the same size
+    transform = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor()
+    ])
+    for i, img in enumerate(images):
+        if isinstance(img, PIL.Image.Image):
+            img = transform(img)
+        save_image(img, os.path.join(gen_images_dir, f"gen_{i}.png"))
 
 
-fid_score = torch_fidelity.calculate_metrics(
-    input1=real_images_dir,
-    input2=gen_images_dir,
-    cuda=True,
-    fid=True
-)
+    fid_score = torch_fidelity.calculate_metrics(
+        input1=real_images_dir,
+        input2=gen_images_dir,
+        cuda=True,
+        fid=True
+    )
 
-print(f"FID: {fid_score['frechet_inception_distance']}")
+    print(f"FID: {fid_score['frechet_inception_distance']}")
+
+if ddp:destroy_process_group()
 
 """
 How else can we make this faster:
