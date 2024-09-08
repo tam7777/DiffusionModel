@@ -2,4 +2,4 @@
 
 Diffuion Model and Transformer
 
-\[y=x^2 \]
+$y=x^2$
