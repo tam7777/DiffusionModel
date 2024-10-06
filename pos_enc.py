@@ -209,9 +209,6 @@ def get_number_of_epochs(weights_dir='./weight', loss_file='./losses.txt'):
             f.writelines(adjusted_loss_lines)
     else:
         print(f'File {loss_file} does not exist. Propably there was an error whilst training and could not save loss.txt file')
-    
-    print(f"Your latest epoch_is: {latest_epoch}")
-
     return latest_epoch
 
 if __name__ == "__main__":

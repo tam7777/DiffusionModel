@@ -2,7 +2,9 @@ import os
 import torch
 import inspect
 
-#source DiffusionModel/bin/activate
+# Export include path
+os.environ['C_INCLUDE_PATH'] = '/home/miki/Python-3.10.12/include/python3.10'
+
 #torchrun --standalone --nproc_per_node=8 main.py
 
 import math
@@ -79,8 +81,13 @@ else:
 
 weight_path = os.path.join(weight_dir, 'model_weights.pth')
 
-gen_images_dir=os.path.join(weight_dir, 'generated')
-real_images_dir=os.path.join(weight_dir, 'original')
+if model_size!='s':
+    gen_dir=f"/raid/miki/FID_{data}/graph/{model_type}_m"
+else:
+    gen_dir=f"/raid/miki/FID_{data}/graph/{model_type}"
+
+gen_images_dir=os.path.join(gen_dir, 'generated')
+real_images_dir=os.path.join(gen_dir, 'original')
 
 dataloader = DataLoader(
     dataset,
@@ -123,112 +130,26 @@ else:
 model.to(device)
 model=torch.compile(model)
 model = DDP(model, device_ids=[ddp_local_rank])
-raw_model=model.module if ddp else model
 if master_process:print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
 
-#optimizer = AdamW(model.parameters(), lr=lr)
-#This might cause slow and inefficient learning.
-optimizer=raw_model.configure_optimizers(weight_decay=0.9, learning_rate=lr, device=device)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
-
-# Load weights if they exist
-loss_file_path=os.path.join(weight_dir, 'losses.txt')
-exiting_epoch=0
 
 if os.path.exists(weight_path):
     try:
         model.load_state_dict(torch.load(weight_path))
         if master_process:print(f"Loaded weights from {weight_path}")
-        exiting_epoch=get_number_of_epochs(f"{weight_dir}/weight", loss_file_path)
     except:
         if master_process:print("Weights not load")
-        old_loss_file_path=os.path.join(weight_dir, 'old_losses.txt')
-        delete_file(loss_file_path, old_loss_file_path)
+        import sys; sys.exit()
 else:
-    if master_process:
-        print(f"Can not find {weight_path}")
-        os.makedirs(weight_dir + '/weight', exist_ok=True)
+    if master_process:print(f"Can not find {weight_path}")
+    import sys; sys.exit()
 
-torch.set_float32_matmul_precision('high')
 
 losses = []
-for epoch in range(epochs):
-    model.train()
-    loss_sum = 0.0
-    cnt = 0
-
-    for images, labels in dataloader:
-        optimizer.zero_grad()
-        x = images.to(device)
-        labels = labels.to(device)
-        t = torch.randint(1, num_timesteps + 1, (len(x),), device=device)
-
-        # Encode images to latent space
-        if data != "MNIST":
-            with torch.no_grad():
-                x_latent = vae.encode(x).latent_dist.sample().mul_(0.18215)  # Scaling factor used in official implementation
-        else:
-            x_latent=x
-        x_latent=x_latent.to(device)
-
-        x_noisy, noise = diffuser.add_noise(x_latent, t)
-        #noise_pred has e-01 meaning quite float sensitive, maybe would work if 
-        #noise and noise_pred is both bfloat16
-        #with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        noise_pred = model(x_noisy, t, labels)
-           
-        loss = F.mse_loss(noise_pred, noise)
-
-        loss.backward()
-
-        #Clip the global norm of the gradient to 1
-        norm=torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
-
-        torch.cuda.synchronize()
-
-        loss_sum += loss.item()
-
-        cnt += 1
-
-    scheduler.step()
-    loss_avg = loss_sum / cnt
-
-    if ddp:
-        loss_av=torch.tensor(loss_avg, device=device)
-        dist.all_reduce(loss_av, op=dist.ReduceOp.AVG)
-
-    losses.append(loss_avg)
-    if master_process and epoch%1000==0:
-        print(f'Epoch {epoch+exiting_epoch} | Loss: {loss_avg}')
-
-    # Save weights every 10 epoch
-    if epoch%1000==0 and master_process:
-        temp_weight_path = weight_dir + f'/weight/{epoch+exiting_epoch}_weight.pth'
-        torch.save(model.state_dict(), temp_weight_path)
-        torch.save(model.state_dict(), weight_path)
 
 if master_process:
-    # plot losses
-    save_losses_to_file(losses, loss_file_path)
-    loss_plot_path = os.path.join(weight_dir, 'loss_plot.png')
-    plt.plot(losses)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.savefig(loss_plot_path)
 
-    cifar_labels = {
-        0: "Airplane",
-        1: "Automobile",
-        2: "Bird",
-        3: "Cat",
-        4: "Deer",
-        5: "Dog",
-        6: "Frog",
-        7: "Horse",
-        8: "Ship",
-        9: "Truck"
-    }
+    HAM_labels = {0:'nv', 1:'mel', 2:'bkl', 3:'bcc', 4:'akiec', 5:'vasc', 6:'df'}
 
     def show_images(image_dir, labels=None, rows=2, cols=10):
         fig = plt.figure(figsize=(cols, rows))
@@ -240,8 +161,8 @@ if master_process:
                 ax = fig.add_subplot(rows, cols, i + 1)
                 plt.imshow(img)
                 if labels is not None:
-                    if data == 'CIFAR':  
-                        ax.set_xlabel(cifar_labels[int(labels[i].item())])
+                    if data == 'HAM':  
+                        ax.set_xlabel(HAM_labels[int(labels[i].item())])
                     else:
                         ax.set_xlabel(labels[i].item())
                 ax.get_xaxis().set_ticks([])
@@ -255,7 +176,7 @@ if master_process:
     num_samples = yml['Main']['num_samples']
     model.eval()
     with torch.no_grad():
-        images_latent, labels = diffuser.sample(model, x_shape=(20, latent_dim, latent_size, latent_size), num_labels=num_labels)
+        images_latent, labels = diffuser.sample(model, x_shape=(num_samples, latent_dim, latent_size, latent_size), num_labels=num_labels)
         if data!="MNIST":
             images = vae.decode(images_latent / 0.18215).sample
 
@@ -281,26 +202,26 @@ if master_process:
         save_image(img, os.path.join(gen_images_dir, f"gen_{i}.png"))
 
 
-    fid_score = torch_fidelity.calculate_metrics(
+    fid_metrics = torch_fidelity.calculate_metrics(
         input1=real_images_dir,
         input2=gen_images_dir,
         cuda=True,
-        fid=True
+        fid=True,
+        precision=True,
+        recall=True
     )
 
-    print(f"FID: {fid_score['frechet_inception_distance']}")
+    print(f"FID: {fid_metrics['frechet_inception_distance']}")
+
+    # Safely print precision and recall if they exist in the dictionary
+    if 'precision' in fid_metrics:
+        print(f"Precision: {fid_metrics['precision']}")
+    else:
+        print("Precision not available in the results")
+
+    if 'recall' in fid_metrics:
+        print(f"Recall: {fid_metrics['recall']}")
+    else:
+        print("Recall not available in the results")
 
 if ddp:destroy_process_group()
-
-"""
-How else can we make this faster:
-    Big match
-     create minibatch
-    learning rate skeduler
-
-Get styleGAN
-
-Get recall precision
-
-Make a file for comparing fid, recall and precision
-"""
