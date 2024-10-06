@@ -1,6 +1,8 @@
 # Generating Dermatological Images using Diffusion Transformer
 
-This repository contains the code and data for the project on generating synthetic dermatological images using Diffusion Transformer (DiT). The goal is to enhance medical image datasets and improve AI model training in dermatology. This work builds on Diffusion Transformers to create high-quality synthetic images for both standardized datasets and in-the-wild dermatological conditions.
+This repository contains the code for the project on generating synthetic dermatological images using Diffusion Transformer (DiT). The goal is to enhance medical image datasets and improve AI model training in dermatology. This work builds on Diffusion Transformers to create high-quality synthetic images for both standardized datasets and in-the-wild dermatological conditions. 
+
+Modifications are needed as the current explanation does not fully reflect or explain the methodologies and findings presented in the accompanying paper. 
 
 ## Table of Contents
 
