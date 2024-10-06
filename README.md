@@ -10,7 +10,6 @@ This repository contains the code and data for the project on generating synthet
 - [Datasets](#datasets)
 - [Model Details](#model-details)
 - [Performance](#performance)
-- [Contributing](#contributing)
 - [License](#license)
 
 ## Introduction
@@ -26,7 +25,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-For simplicity, training and evaluation is done together. All you need to do is run the python code below. Depending on the number of machine you are using, change the number of --nproc_per_node. The code is modified so that it works efficiently on H100.
+For simplicity, training and evaluation is done together. All you need to do is run the python code below. Depending on the number of machine you are using, change the number of `--nproc_per_node`. The code is modified so that it works efficiently on H100.
 ```
 torchrun --standalone --nproc_per_node=1 main.py
 ```
@@ -35,11 +34,37 @@ The details of the model is specified at config.yaml, including which dataset to
 
 ## Datasets
 
+| Dataset | Description | Source |
+| --- | --- | --- |
+| HAM10000 | Large collection of dermatoscopic skin lesion images | [HAM10000](https://www.nature.com/articles/sdata2018161) |
+| SCIN | In-the-wild images of various skin conditions | [SCIN](https://research.google/blog/scin-a-new-resource-for-representative-dermatology-images/) |
+
 ## Model Details
+Three models were trained and compared in this study:
+| Model | Description |
+| --- | --- |
+| DiT | Normal DiT model for image generation |
+| DiT-B | Enhanced DiT with more attention heads |
+| LDM | Latent Diffusion Model baseline |
 
 ## Performance
+The table below shows the performance of different models measured using Frechet Inception Distance (FID) after training:
+HAM10000:
+| Model | FID (900 epochs) |
+| --- | --- |
+| DiT | 206.246 |
+| DiT-B | 163.236 |
+| LDM | 220.160 |
 
-## Contributing
+SCIN Dataset:
+| Model | FID (2500 epochs) |
+| --- | --- |
+| DiT | 322.518 |
+| DiT-B | 293.374 |
+
+
+**Results**
+The DiT-B model demonstrated superior performance on the HAM10000 dataset, producing high-quality, realistic dermatological images. However, further optimization is required to improve performance on the more complex SCIN dataset.
 
 ## License
-
+This project is licensed under the MIT License.
