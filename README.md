@@ -19,7 +19,27 @@ In this project, we leverage **Diffusion Transformers (DiT)** to generate synthe
 
 ## Installation
 
-To run this project, you need to install the following dependencies:
+To run this project, using venv is recommended. Once you have activated venv, install the following dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+## Usage
+For simplicity, training and evaluation is done together. All you need to do is run the python code below. Depending on the number of machine you are using, change the number of --nproc_per_node. The code is modified so that it works efficiently on H100.
+```
+torchrun --standalone --nproc_per_node=1 main.py
+```
+The details of the model is specified at config.yaml, including which dataset to use or which model to use
+
+
+## Datasets
+
+## Model Details
+
+## Performance
+
+## Contributing
+
+## License
+
